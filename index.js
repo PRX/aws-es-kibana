@@ -12,35 +12,46 @@ var yargs = require('yargs')
     .usage('usage: $0 [options] <aws-es-cluster-endpoint>')
     .option('b', {
         alias: 'bind-address',
-        default: '127.0.0.1',
+        default: process.env.BIND_ADDRESS || '127.0.0.1',
         demand: false,
         describe: 'the ip address to bind to',
         type: 'string'
     })
     .option('p', {
         alias: 'port',
-        default: 9200,
+        default: process.env.PORT || 9200,
         demand: false,
         describe: 'the port to bind to',
         type: 'number'
     })
     .option('r', {
         alias: 'region',
+        default: process.env.REGION,
         demand: false,
         describe: 'the region of the Elasticsearch cluster',
         type: 'string'
+    })
+    .option('o', {
+        alias: 'only',
+        default: process.env.ONLY || false,
+        demand: false,
+        describe: 'only allow kibana-related write requests',
+        type: 'boolean'
     })
     .help()
     .version()
     .strict();
 var argv = yargs.argv;
 
-if (argv._.length !== 1) {
-    yargs.showHelp();
+if (argv._.length === 0 && !process.env.ENDPOINT) {
+    yargs.showHelp('You must specify an ENDPOINT');
+    process.exit(1);
+} else if (argv._.length > 1) {
+    yargs.showHelp('You must specify an ENDPOINT');
     process.exit(1);
 }
 
-var ENDPOINT = argv._[0];
+var ENDPOINT = argv._[0] || process.env.ENDPOINT;
 
 // Try to infer the region if it is not provided as an argument.
 var REGION = argv.r;
@@ -56,13 +67,28 @@ if (!REGION) {
     }
 }
 
-var TARGET = argv._[0];
+var TARGET = ENDPOINT;
 if (!TARGET.match(/^https?:\/\//)) {
     TARGET = 'https://' + TARGET;
 }
 
 var BIND_ADDRESS = argv.b;
 var PORT = argv.p;
+var ONLY = argv.o;
+
+function shouldSignRequest(req) {
+  if (!ONLY) {
+    return true;
+  } else if (req.method === 'GET' || req.method === 'HEAD') {
+    return true;
+  } else if (req.path.match(/^\/\.kibana/)) {
+    return true;
+  } else if (req.method === 'POST' && req.path.match(/^\/[^\/]+\/_msearch/)) {
+    return true;
+  } else {
+    return false;
+  }
+}
 
 var creds;
 var chain = new AWS.CredentialProviderChain();
@@ -106,16 +132,29 @@ proxy.on('proxyReq', function (proxyReq, req, res, options) {
     request.headers['presigned-expires'] = false;
     request.headers['Host'] = ENDPOINT;
 
-    var signer = new AWS.Signers.V4(request, 'es');
-    signer.addAuthorization(creds, new Date());
+    if (shouldSignRequest(req)) {
+      var signer = new AWS.Signers.V4(request, 'es');
+      signer.addAuthorization(creds, new Date());
+    }
 
     proxyReq.setHeader('Host', request.headers['Host']);
-    proxyReq.setHeader('X-Amz-Date', request.headers['X-Amz-Date']);
-    proxyReq.setHeader('Authorization', request.headers['Authorization']);
+    if (request.headers['X-Amz-Date']) proxyReq.setHeader('X-Amz-Date', request.headers['X-Amz-Date']);
+    if (request.headers['Authorization']) proxyReq.setHeader('Authorization', request.headers['Authorization']);
     if (request.headers['x-amz-security-token']) proxyReq.setHeader('x-amz-security-token', request.headers['x-amz-security-token']);
 });
 
-http.createServer(app).listen(PORT, BIND_ADDRESS);
+proxy.on('error', function(e) {
+  if (e.code !== 'ECONNRESET') {
+    console.error('Fatal error:' + e);
+    process.exit(1);
+  }
+});
+
+if (BIND_ADDRESS === 'localhost') {
+  http.createServer(app).listen(PORT);
+} else {
+  http.createServer(app).listen(PORT, BIND_ADDRESS);
+}
 
 console.log(figlet.textSync('AWS ES Proxy!', {
     font: 'Speed',
@@ -123,5 +162,6 @@ console.log(figlet.textSync('AWS ES Proxy!', {
     verticalLayout: 'default'
 }));
 
+console.log('Proxing requests to ' + ENDPOINT);
 console.log('AWS ES cluster available at http://' + BIND_ADDRESS + ':' + PORT);
 console.log('Kibana available at http://' + BIND_ADDRESS + ':' + PORT + '/_plugin/kibana/');
