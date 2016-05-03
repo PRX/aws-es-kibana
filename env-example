@@ -1,0 +1,6 @@
+# cp env-example .env
+AWS_ACCESS_KEY_ID=your-key
+AWS_SECRET_ACCESS_KEY=your-secret
+ENDPOINT=your-aws-es-endpoint
+BIND_ADDRESS=localhost
+ONLY=true

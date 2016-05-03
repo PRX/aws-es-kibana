@@ -1,0 +1,12 @@
+proxy:
+  build: .
+  command: start
+  env_file: .env
+  environment:
+    VIRTUAL_HOST: aws-es-kibana.docker
+    VIRTUAL_PORT: 9200
+  ports:
+    - "9200:9200"
+  volumes:
+    - ./index.js:/app/index.js
+    - ./package.json:/app/package.json
